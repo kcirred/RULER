@@ -87,13 +87,14 @@ fi
 # Start client (prepare data / call model API / obtain final metrics)
 total_time=0
 for MAX_SEQ_LENGTH in "${SEQ_LENGTHS[@]}"; do
-    
+
     RESULTS_DIR="${ROOT_DIR}/${MODEL_NAME}/${BENCHMARK}/${MAX_SEQ_LENGTH}"
     DATA_DIR="${RESULTS_DIR}/data"
     PRED_DIR="${RESULTS_DIR}/pred"
     mkdir -p ${DATA_DIR}
     mkdir -p ${PRED_DIR}
-    
+    sed -i "58i \\\t\t\tmax_expected_seq_len=${MAX_SEQ_LENGTH}," ./pred/model_wrappers.py
+
     for TASK in "${TASKS[@]}"; do
         python data/prepare.py \
             --save_dir ${DATA_DIR} \
@@ -105,7 +106,7 @@ for MAX_SEQ_LENGTH in "${SEQ_LENGTHS[@]}"; do
             --model_template_type ${MODEL_TEMPLATE_TYPE} \
             --num_samples ${NUM_SAMPLES} \
             ${REMOVE_NEWLINE_TAB}
-        
+
         start_time=$(date +%s)
         python pred/call_api.py \
             --data_dir ${DATA_DIR} \
@@ -118,12 +119,13 @@ for MAX_SEQ_LENGTH in "${SEQ_LENGTHS[@]}"; do
             --top_k ${TOP_K} \
             --top_p ${TOP_P} \
             --batch_size ${BATCH_SIZE} \
+            --fms_variant ${MODEL_NAME}
             ${STOP_WORDS}
         end_time=$(date +%s)
         time_diff=$((end_time - start_time))
         total_time=$((total_time + time_diff))
     done
-    
+
     python eval/evaluate.py \
         --data_dir ${PRED_DIR} \
         --benchmark ${BENCHMARK}

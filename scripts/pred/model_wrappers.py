@@ -17,6 +17,120 @@ import logging
 import requests
 import torch
 from typing import Dict, List, Optional
+from torch import distributed as dist
+
+class FMSModel:
+    def __init__(self, name_or_path: str, variant: str, **generation_kwargs) -> None:
+        from transformers import AutoTokenizer, pipeline
+        from fms.models import get_model
+        from fms import models
+        from fms.models.hf.llama.modeling_llama_hf import HFAdaptedLLaMAForCausalLM
+        from fms.models.hf.llama.configuration_llama_hf import HFAdaptedLLaMAConfig
+        from fms.models.hf.granite.modeling_granite_hf import HFAdaptedGraniteForCausalLM
+        from fms.models.hf.granite.configuration_granite_hf import HFAdaptedGraniteConfig
+        from fms_fsdp.utils.config_utils import get_model_config
+        from fms.models.llama import _llama_factory_factory
+
+        self.tokenizer = AutoTokenizer.from_pretrained(name_or_path, trust_remote_code=True)
+        _config_data = get_model_config(variant)
+        _architecture_name, _variant = variant.split('_', 1)
+
+        if _architecture_name == 'llama':
+            models.register_model(_architecture_name, _variant, _llama_factory_factory(_config_data))
+        else:
+            raise NotImplementedError()
+
+        print(f'{_variant=}')
+
+        dist.init_process_group()
+        # # Fix until PT 2.3
+        torch._C._distributed_c10d._register_process_group("default", dist.group.WORLD)
+
+        self._fms_model = get_model(
+            _architecture_name,
+            _variant,
+            name_or_path,
+            device_type='cuda',
+            data_type=torch.float16,
+            distributed_strategy='tp',
+            checkpoint_sharding=None,
+            group=dist.group.WORLD,
+            linear_config={"linear_type": "torch_linear"},
+            fused_weights=True,
+        )
+
+        torch.set_grad_enabled(False)
+        self._fms_model.eval()
+
+        print(f'{self._fms_model=}')
+        print(f'{self._fms_model.config=}')
+        self.pipeline = None
+
+        if _architecture_name == 'llama':
+            fms_hf_config = HFAdaptedLLaMAConfig.from_fms_config(self._fms_model.get_config())
+            self.model = HFAdaptedLLaMAForCausalLM.from_fms_model(self._fms_model, **fms_hf_config.to_dict())
+        elif _architecture_name == 'mamba':
+            raise NotImplementedError()
+        elif _architecture_name == 'granite':
+            fms_hf_config = HFAdaptedGraniteConfig.from_fms_config(self._fms_model.get_config())
+            self.model = HFAdaptedGraniteForCausalLM.from_fms_model(self._fms_model, **fms_hf_config.to_dict())
+        else:
+            raise NotImplementedError()
+
+        self.model.eval()
+
+        print(f'HF Adapted Version of Model: {self.model=}')
+
+        print(f'Generation kwargs: {generation_kwargs}')
+
+        self.generation_kwargs = generation_kwargs
+        self.stop = self.generation_kwargs.pop('stop')
+
+        if self.tokenizer.pad_token is None:
+            # add pad token to allow batching (known issue for llama2)
+            self.tokenizer.padding_side = 'left'
+            self.tokenizer.pad_token = self.tokenizer.eos_token
+            self.tokenizer.pad_token_id = self.tokenizer.eos_token_id
+
+
+    def __call__(self, prompt: str, **kwargs) -> dict:
+        return self.process_batch([prompt], **kwargs)[0]
+
+    def process_batch(self, prompts: List[str], **kwargs) -> List[dict]:
+        if self.pipeline is None:
+            inputs = self.tokenizer(prompts, return_tensors="pt", padding=True).to(self.model.device)
+            generated_ids = self.model.generate(
+                **inputs,
+                **self.generation_kwargs
+            )
+            generated_texts = self.tokenizer.batch_decode(generated_ids, skip_special_tokens=True)
+        else:
+            output = self.pipeline(text_inputs=prompts, **self.generation_kwargs, )
+            assert len(output) == len(prompts)
+            # output in the form of a list of list of dictionaries
+            # outer list len = batch size
+            # inner list len = 1
+            generated_texts = [llm_result[0]["generated_text"] for llm_result in output]
+
+        results = []
+
+        for text, prompt in zip(generated_texts, prompts):
+            # remove the input form the generated text
+            # This is a workaround for the llama3 tokenizer not being able to reproduce the same prompt after tokenization
+            # see Issue https://github.com/NVIDIA/RULER/issues/54 for explaination
+            if self.pipeline is None:
+                tokenized_prompt = self.tokenizer(prompt, return_tensors="pt", padding=True)
+                prompt = self.tokenizer.decode(tokenized_prompt.input_ids[0], skip_special_tokens=True)
+            if text.startswith(prompt):
+                text = text[len(prompt):]
+
+            if self.stop is not None:
+                for s in self.stop:
+                    text = text.split(s)[0]
+
+            results.append({'text': [text]})
+
+        return results
 
 
 class HuggingFaceModel:
@@ -29,7 +143,7 @@ class HuggingFaceModel:
             model_kwargs = None
         else:
             model_kwargs = {"attn_implementation": "flash_attention_2"}
-        
+
         try:
             self.pipeline = pipeline(
                 "text-generation",
@@ -43,7 +157,7 @@ class HuggingFaceModel:
         except:
             self.pipeline = None
             self.model = AutoModelForCausalLM.from_pretrained(name_or_path, trust_remote_code=True, device_map="auto", torch_dtype=torch.bfloat16,)
-            
+
         self.generation_kwargs = generation_kwargs
         self.stop = self.generation_kwargs.pop('stop')
 

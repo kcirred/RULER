@@ -21,7 +21,7 @@ dataset jsonl:
     "outputs": [str],
 }
 
-prediction jsonl: 
+prediction jsonl:
 {
     "index" int,
     "input": str,
@@ -52,6 +52,7 @@ SERVER_TYPES = (
     'gemini',
     'hf',
     'mamba',
+    'fms',
 )
 
 
@@ -76,10 +77,11 @@ parser.add_argument("--server_host", type=str, default='127.0.0.1')
 parser.add_argument("--server_port", type=str, default='5000')
 parser.add_argument("--ssh_server", type=str)
 parser.add_argument("--ssh_key_path", type=str)
-parser.add_argument("--model_name_or_path", type=str, default='gpt-3.5-turbo', 
+parser.add_argument("--model_name_or_path", type=str, default='gpt-3.5-turbo',
                     help='supported models from OpenAI or HF (provide a key or a local path to the checkpoint)')
 
 # Inference
+parser.add_argument("--fms_variant", type=str, default='llama_1b', help='provide the variant such as llama_1b, mamba_9.8b')
 parser.add_argument("--temperature", type=float, default=1.0)
 parser.add_argument("--top_k", type=int, default=32)
 parser.add_argument("--top_p", type=float, default=1.0)
@@ -91,7 +93,7 @@ parser.add_argument("--batch_size", type=int, default=1)
 
 args = parser.parse_args()
 args.stop_words = list(filter(None, args.stop_words.split(',')))
-if args.server_type == 'hf' or args.server_type == 'gemini':
+if args.server_type == 'hf' or args.server_type == 'gemini' or args.server_type == 'fms':
     args.threads = 1
 
 
@@ -141,7 +143,7 @@ def get_llm(tokens_to_generate):
             stop=args.stop_words,
             tokens_to_generate=tokens_to_generate,
         )
-        
+
     elif args.server_type == 'openai':
         from client_wrappers import OpenAIClient
         llm = OpenAIClient(
@@ -165,7 +167,7 @@ def get_llm(tokens_to_generate):
             stop=args.stop_words,
             tokens_to_generate=tokens_to_generate,
         )
-        
+
     elif args.server_type == 'hf':
         from model_wrappers import HuggingFaceModel
         llm = HuggingFaceModel(
@@ -178,7 +180,21 @@ def get_llm(tokens_to_generate):
             stop=args.stop_words,
             max_new_tokens=tokens_to_generate,
         )
-    
+
+    elif args.server_type == 'fms':
+        from model_wrappers import FMSModel
+        llm = FMSModel(
+            name_or_path=args.model_name_or_path,
+            variant=args.fms_variant,
+            do_sample=args.temperature > 0,
+            repetition_penalty=1,
+            temperature=args.temperature,
+            top_k=args.top_k,
+            top_p=args.top_p,
+            stop=args.stop_words,
+            max_new_tokens=tokens_to_generate,
+        )
+
     elif args.server_type == 'mamba':
         from model_wrappers import MambaModel
         # mamba uses its own generation function, do not pass in do_sample
@@ -192,7 +208,7 @@ def get_llm(tokens_to_generate):
             stop=args.stop_words,
             max_new_tokens=tokens_to_generate,
         )
-        
+
     else:
         raise RuntimeError(f'Unsupported server type {args.server_type}')
 
@@ -201,9 +217,9 @@ def get_llm(tokens_to_generate):
 
 def main():
     start_time = time.time()
-    
+
     curr_folder = os.path.dirname(os.path.abspath(__file__))
-    
+
     try:
         sys.path.append(os.path.dirname(curr_folder))
         module = importlib.import_module(f"data.{args.benchmark}.constants")
@@ -216,17 +232,17 @@ def main():
 
     if args.task not in tasks_customized:
         raise ValueError(f'{args.task} is not found in config_tasks.yaml')
-        
+
     config = tasks_customized.get(args.task)
     config.update(tasks_base[config['task']])
 
     task_file = args.data_dir / args.task / f'{args.subset}.jsonl'
-    
+
     if args.chunk_amount > 1:
         pred_file = args.save_dir / f'{args.task}-{args.chunk_idx}.jsonl'
     else:
         pred_file = args.save_dir / f'{args.task}.jsonl'
-        
+
     print(f'Predict {args.task} \nfrom {task_file}\nto {pred_file}')
     pred_file.parent.mkdir(parents=True, exist_ok=True)
 
