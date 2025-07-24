@@ -384,7 +384,7 @@ def main():
     if args.hook:
         hooks = []  # for accessing hook itself
         h_hooks = []  # for hook removal
-        for n, m in llm.model.named_modules():
+        for n, m in llm.llm_engine.model_executor.driver_worker.worker.model_runner.model.named_modules():
             if isinstance(m, BambaMixer):  # and quant_opt is not None:  # m.layer_idx not in layers_to_skip:
                 lay_idx = getattr(m, "layer_idx", n.split(".")[2])
                 hooks.append(
@@ -393,7 +393,7 @@ def main():
                         lay_idx=lay_idx,
                         quant_opt='fp8_dyn_perT',
                         rec_scale=False,  # quant_opt is not None,
-                        is_vllm=False,
+                        is_vllm=True,
                     )
                 )
                 h_hooks.append(m.register_forward_pre_hook(hooks[-1], with_kwargs=True,))
