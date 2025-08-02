@@ -99,6 +99,7 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     engine_args = AsyncEngineArgs.from_cli_args(args)
+    engine_args.trust_remote_code = True
     engine = AsyncLLMEngine.from_engine_args(engine_args)
 
     app.root_path = args.root_path
