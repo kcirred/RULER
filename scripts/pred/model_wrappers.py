@@ -42,19 +42,19 @@ class FMSModel:
 
         print(f'{_variant=}')
 
-        dist.init_process_group()
+        # dist.init_process_group()
         # # Fix until PT 2.3
-        torch._C._distributed_c10d._register_process_group("default", dist.group.WORLD)
+        # torch._C._distributed_c10d._register_process_group("default", dist.group.WORLD)
 
+        # Disable 'tp' for universal attention
         self._fms_model = get_model(
             _architecture_name,
             _variant,
             name_or_path,
             device_type='cuda',
-            data_type=torch.float16,
-            distributed_strategy='tp',
+            data_type=torch.bfloat16,
+            distributed_strategy=None,
             checkpoint_sharding=None,
-            group=dist.group.WORLD,
             linear_config={"linear_type": "torch_linear"},
             fused_weights=True,
         )
@@ -80,6 +80,8 @@ class FMSModel:
         self.model.eval()
 
         print(f'HF Adapted Version of Model: {self.model=}')
+
+        generation_kwargs['use_cache'] = False
 
         print(f'Generation kwargs: {generation_kwargs}')
 
