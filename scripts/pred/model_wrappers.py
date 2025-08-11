@@ -46,18 +46,32 @@ class FMSModel:
         # # Fix until PT 2.3
         # torch._C._distributed_c10d._register_process_group("default", dist.group.WORLD)
 
-        # Disable 'tp' for universal attention
-        self._fms_model = get_model(
-            _architecture_name,
-            _variant,
-            name_or_path,
-            device_type='cuda',
-            data_type=torch.bfloat16,
-            distributed_strategy=None,
-            checkpoint_sharding=None,
-            linear_config={"linear_type": "torch_linear"},
-            fused_weights=True,
-        )
+        from fms.models.llama import LLaMA
+        from torch.distributed._shard.checkpoint import FileSystemReader, load
+
+        self._fms_model = LLaMA(_config_data)
+        print(f'{self._fms_model=}')
+
+        print(f"Reading state dict from {name_or_path}")
+        state_dict = {"model_state": self._fms_model.state_dict()}
+
+        load(state_dict=state_dict, storage_reader=FileSystemReader(name_or_path))
+
+        print("Loading state dict into the model...")
+        self._fms_model.load_state_dict(state_dict["model_state"])
+        self._fms_model.to('cuda')
+        # Disable 'tp' for universal attention, put *.pth
+        # self._fms_model = get_model(
+        #     _architecture_name,
+        #     _variant,
+        #     name_or_path,
+        #     device_type='cuda',
+        #     data_type=torch.bfloat16,
+        #     distributed_strategy=None,
+        #     checkpoint_sharding=None,
+        #     linear_config={"linear_type": "torch_linear"},
+        #     fused_weights=True,
+        # )
 
         torch.set_grad_enabled(False)
         self._fms_model.eval()
@@ -81,7 +95,7 @@ class FMSModel:
 
         print(f'HF Adapted Version of Model: {self.model=}')
 
-        generation_kwargs['use_cache'] = False
+        generation_kwargs['use_cache'] = True
 
         print(f'Generation kwargs: {generation_kwargs}')
 
