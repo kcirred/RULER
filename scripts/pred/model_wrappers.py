@@ -46,7 +46,7 @@ class HuggingFaceModel:
         #     )
         # except:
         self.pipeline = None
-        self.model = AutoModelForCausalLM.from_pretrained(name_or_path, trust_remote_code=True, device_map="auto", torch_dtype=torch.bfloat16,)
+        self.model = AutoModelForCausalLM.from_pretrained(name_or_path, trust_remote_code=True, device_map="cuda:0", torch_dtype=torch.bfloat16,)
 
         self.generation_kwargs = generation_kwargs
         self.stop = self.generation_kwargs.pop('stop')
